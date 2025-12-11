@@ -389,7 +389,7 @@ def test_recurrent_fused_gated_delta_rule(
     v = torch.randn(batch, T, num_v_heads, v_head_dim, dtype=dtype)
     g = torch.randn(batch, T, num_v_heads, dtype=torch.float32)
     beta = torch.randn(batch, T, num_v_heads, dtype=torch.float32)
-    initial_state = torch.randn(batch, T, num_v_heads, k_head_dim, v_head_dim, dtype=torch.float32)
+    initial_state = torch.randn(batch, num_v_heads, k_head_dim, v_head_dim, dtype=torch.float32)
 
     if num_v_heads // num_heads > 1:
         q_ = q.repeat_interleave(num_v_heads // num_heads, dim=2)

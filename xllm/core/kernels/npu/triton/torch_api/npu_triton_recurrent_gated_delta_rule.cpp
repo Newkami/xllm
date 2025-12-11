@@ -89,10 +89,9 @@ std::pair<torch::Tensor, torch::Tensor> npu_fused_recurrent_gated_delta_rule(
 
   torch::Tensor beta_tensor;
   if (beta == c10::nullopt) {
-    std::vector<int64_t> beta_shape(q_shape.begin(), q_shape.end() - 1);
-    beta_tensor = torch::ones(
-        beta_shape,
-        torch::TensorOptions().dtype(torch::kFloat32).device(q.device()));
+  beta_tensor = torch::ones(
+      g.sizes(),
+      torch::TensorOptions().dtype(g.dtype()).device(g.device()));
   } else {
     beta_tensor = beta.value();
   }
@@ -103,7 +102,7 @@ std::pair<torch::Tensor, torch::Tensor> npu_fused_recurrent_gated_delta_rule(
   int64_t k_head_dim = k_shape[3];      // K
   int64_t num_v_head = v_shape[2];      // HV
   int64_t v_head_dim = v_shape.back();  // V
-  int N = batch;
+  int32_t N = batch;
   if (cu_seqlens.has_value()) {
     // cu_seqlens is a 1D LongTensor
     N = cu_seqlens.value().numel() - 1;
@@ -191,6 +190,7 @@ std::pair<torch::Tensor, torch::Tensor> npu_fused_recurrent_gated_delta_rule(
     << "fused_recurrent_gated_delta_rule_fwd_kernel" << " : error=" << ret;
     return std::make_pair(o, final_state);
   }
+  /*
   ret = launchers::fused_recurrent_gated_delta_rule_fwd_kernel(
       stream,
       gridX,
@@ -212,13 +212,75 @@ std::pair<torch::Tensor, torch::Tensor> npu_fused_recurrent_gated_delta_rule(
       scale_value,
       static_cast<int32_t>(N),
       static_cast<int32_t>(seq));
-
-  if (ret != ACL_ERROR_NONE) {
+  */
+  void *ffts_addr = nullptr;
+  uint32_t block_num = gridX * gridY * gridZ;
+  uint32_t ffts_len; ret = rtGetC2cCtrlAddr((uint64_t*)&ffts_addr, &ffts_len);
+  if (ret != RT_ERROR_NONE) {
+    LOG(ERROR) << "Failed to get C2C control address: " << ret;
+    return std::make_pair(o, final_state);
+  }
+  struct __attribute__((packed)) {
+    void* ffts_addr_ __attribute__((aligned(8)));
+    void* syncBlockLock_ __attribute__((aligned(8)));
+    void* workspace_addr_ __attribute__((aligned(8)));
+    void* q_ __attribute__((aligned(8)));
+    void* k_ __attribute__((aligned(8)));
+    void* v_ __attribute__((aligned(8)));
+    void* g_ __attribute__((aligned(8)));
+    void* beta_ __attribute__((aligned(8)));
+    void* o_ __attribute__((aligned(8)));
+    void* h0_ __attribute__((aligned(8)));
+    void* ht_ __attribute__((aligned(8)));
+    void* cu_seqlens_ __attribute__((aligned(8)));
+    void* ssm_state_indices_ __attribute__((aligned(8)));
+    void* num_accepted_tokens_ __attribute__((aligned(8)));
+    float scale_ __attribute__((aligned(4)));
+    int32_t N_ __attribute__((aligned(4)));
+    int32_t T_ __attribute__((aligned(4)));
+    int32_t gridX_ __attribute__((aligned(4)));
+    int32_t gridY_ __attribute__((aligned(4)));
+    int32_t gridZ_ __attribute__((aligned(4)));
+  } _fused_rgdr_args = {
+    static_cast<void*>(ffts_addr),
+    sync_block_lock,
+    workspace_addr,
+    q_ptr,
+    k_ptr,
+    v_ptr,
+    g_ptr,
+    beta_ptr,
+    o_ptr,
+    initial_state_ptr,
+    final_state_ptr,
+    cu_seqlens_ptr,
+    static_cast<float>(scale_value),
+    static_cast<int32_t>(N),
+    static_cast<int32_t>(seq),
+    static_cast<int32_t>(gridX),
+    static_cast<int32_t>(gridY),
+    static_cast<int32_t>(gridZ),
+  };
+  auto kernelHandle = KernelLoader::get_instance().get_kernel("fused_recurrent_gated_delta_rule_fwd_kernel");  
+  if (!kernelHandle.is_valid()) {
+    LOG(ERROR) << "Kernel 'fused_recurrent_gated_delta_rule_fwd_kernel' is not registered";
+    return std::make_pair(o, final_state);
+  }
+  ret = rtKernelLaunch(kernelHandle.get(),
+                       block_num,
+                       static_cast<void*>(&_fused_rgdr_args),
+                       sizeof(_fused_rgdr_args),
+                       nullptr,
+                       stream);
+  if (ret != RT_ERROR_NONE) {
     LOG(ERROR) << "Failed to launch kernel "
     << "fused_recurrent_gated_delta_rule_fwd_kernel" << " : error=" << ret;
   }
-  cleanup(workspace_addr, sync_block_lock);
-
+  ret = cleanup(workspace_addr, sync_block_lock);
+  if (ret != RT_ERROR_NONE) {
+    LOG(ERROR) << "Failed to cleanup workspace and sync block lock for kernel "
+    << "fused_recurrent_gated_delta_rule_fwd_kernel" << " : error=" << ret;
+  }
   o = o.squeeze(0);
   return std::make_pair(o, final_state);
 }
