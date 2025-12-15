@@ -98,7 +98,7 @@ std::pair<torch::Tensor, torch::Tensor> npu_fused_gdn_gating(
   void* dtBiasPtr = const_cast<void*>(dt_bias.data_ptr());
   void* workspace_addr = nullptr;
   void* sync_block_lock = nullptr;
-  auto ret = setup("fused_gdn_gating_head8_kernel", &workspace_addr, &sync_block_lock);
+  auto ret = setup("fused_gdn_gating_head8_kernel", &workspace_addr, &sync_block_lock, gridX * gridY * gridZ);
   if (ret != ACL_ERROR_NONE) {
     LOG(ERROR) << "Failed to setup workspace and sync block lock for kernel "
     << "fused_gdn_gating_head8_kernel" << " : error=" << ret;

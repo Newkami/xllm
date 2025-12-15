@@ -184,13 +184,15 @@ std::pair<torch::Tensor, torch::Tensor> npu_fused_recurrent_gated_delta_rule(
 
   void* workspace_addr = nullptr;
   void* sync_block_lock = nullptr;
-  auto ret = setup("fused_recurrent_gated_delta_rule_fwd_kernel", &workspace_addr, &sync_block_lock);
+  uint32_t block_num = gridX * gridY * gridZ;
+  auto ret = setup("fused_recurrent_gated_delta_rule_fwd_kernel", &workspace_addr, &sync_block_lock, block_num);
   if (ret != ACL_ERROR_NONE) {
     LOG(ERROR) << "Failed to setup workspace and sync block lock for kernel "
     << "fused_recurrent_gated_delta_rule_fwd_kernel" << " : error=" << ret;
+    o = o.squeeze(0);
     return std::make_pair(o, final_state);
   }
-  /*
+  
   ret = launchers::fused_recurrent_gated_delta_rule_fwd_kernel(
       stream,
       gridX,
@@ -207,79 +209,15 @@ std::pair<torch::Tensor, torch::Tensor> npu_fused_recurrent_gated_delta_rule(
       initial_state_ptr,
       final_state_ptr,
       cu_seqlens_ptr,
-      ssm_state_indices_ptr,
-      num_accepted_tokens_ptr,
       scale_value,
       static_cast<int32_t>(N),
-      static_cast<int32_t>(seq));
-  */
-  void *ffts_addr = nullptr;
-  uint32_t block_num = gridX * gridY * gridZ;
-  uint32_t ffts_len; ret = rtGetC2cCtrlAddr((uint64_t*)&ffts_addr, &ffts_len);
-  if (ret != RT_ERROR_NONE) {
-    LOG(ERROR) << "Failed to get C2C control address: " << ret;
-    return std::make_pair(o, final_state);
-  }
-  struct __attribute__((packed)) {
-    void* ffts_addr_ __attribute__((aligned(8)));
-    void* syncBlockLock_ __attribute__((aligned(8)));
-    void* workspace_addr_ __attribute__((aligned(8)));
-    void* q_ __attribute__((aligned(8)));
-    void* k_ __attribute__((aligned(8)));
-    void* v_ __attribute__((aligned(8)));
-    void* g_ __attribute__((aligned(8)));
-    void* beta_ __attribute__((aligned(8)));
-    void* o_ __attribute__((aligned(8)));
-    void* h0_ __attribute__((aligned(8)));
-    void* ht_ __attribute__((aligned(8)));
-    void* cu_seqlens_ __attribute__((aligned(8)));
-    void* ssm_state_indices_ __attribute__((aligned(8)));
-    void* num_accepted_tokens_ __attribute__((aligned(8)));
-    float scale_ __attribute__((aligned(4)));
-    int32_t N_ __attribute__((aligned(4)));
-    int32_t T_ __attribute__((aligned(4)));
-    int32_t gridX_ __attribute__((aligned(4)));
-    int32_t gridY_ __attribute__((aligned(4)));
-    int32_t gridZ_ __attribute__((aligned(4)));
-  } _fused_rgdr_args = {
-    static_cast<void*>(ffts_addr),
-    sync_block_lock,
-    workspace_addr,
-    q_ptr,
-    k_ptr,
-    v_ptr,
-    g_ptr,
-    beta_ptr,
-    o_ptr,
-    initial_state_ptr,
-    final_state_ptr,
-    cu_seqlens_ptr,
-    static_cast<float>(scale_value),
-    static_cast<int32_t>(N),
-    static_cast<int32_t>(seq),
-    static_cast<int32_t>(gridX),
-    static_cast<int32_t>(gridY),
-    static_cast<int32_t>(gridZ),
-  };
-  auto kernelHandle = KernelLoader::get_instance().get_kernel("fused_recurrent_gated_delta_rule_fwd_kernel");  
-  if (!kernelHandle.is_valid()) {
-    LOG(ERROR) << "Kernel 'fused_recurrent_gated_delta_rule_fwd_kernel' is not registered";
-    return std::make_pair(o, final_state);
-  }
-  ret = rtKernelLaunch(kernelHandle.get(),
-                       block_num,
-                       static_cast<void*>(&_fused_rgdr_args),
-                       sizeof(_fused_rgdr_args),
-                       nullptr,
-                       stream);
-  if (ret != RT_ERROR_NONE) {
-    LOG(ERROR) << "Failed to launch kernel "
-    << "fused_recurrent_gated_delta_rule_fwd_kernel" << " : error=" << ret;
-  }
-  ret = cleanup(workspace_addr, sync_block_lock);
-  if (ret != RT_ERROR_NONE) {
-    LOG(ERROR) << "Failed to cleanup workspace and sync block lock for kernel "
-    << "fused_recurrent_gated_delta_rule_fwd_kernel" << " : error=" << ret;
+      static_cast<int32_t>(seq),
+      ssm_state_indices_ptr,
+      num_accepted_tokens_ptr);
+  cleanup(workspace_addr, sync_block_lock);
+  if (ret != ACL_ERROR_NONE) {
+  LOG(ERROR) << "Failed to launch kernel "
+    << "fused_gdn_gating_head8_kernel" << " : error=" << ret;
   }
   o = o.squeeze(0);
   return std::make_pair(o, final_state);

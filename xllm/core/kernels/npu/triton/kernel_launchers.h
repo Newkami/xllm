@@ -43,11 +43,11 @@ REG_KERNEL_LAUNCHER(fused_gdn_gating_head8_kernel, FUSED_GDN_GATING_ARG_LIST)
   OP(void*, h0)                                       \
   OP(void*, ht)                                       \
   OP(void*, cu_seqlens)                               \
-  OP(void*, ssm_state_indices)                        \
-  OP(void*, num_accepted_tokens)                      \
   OP(float, scale)                                    \
   OP(int32_t, N)                                      \
-  OP(int32_t, T)
+  OP(int32_t, T)                                      \
+  OP(void*, ssm_state_indices)                        \
+  OP(void*, num_accepted_tokens)                      
 
 REG_KERNEL_ARGS(fused_recurrent_gated_delta_rule_fwd_kernel,
                 FUSED_RECURRENT_GATED_DELTA_RULE_ARG_LIST)

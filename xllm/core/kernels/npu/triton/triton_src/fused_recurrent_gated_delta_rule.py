@@ -57,11 +57,11 @@ def fused_recurrent_gated_delta_rule_fwd_kernel(
     h0,
     ht,
     cu_seqlens,
-    ssm_state_indices,
-    num_accepted_tokens,
     scale,
     N,  # num of sequences
     T,  # num of tokens
+    ssm_state_indices,
+    num_accepted_tokens,
     B: tl.constexpr,
     H: tl.constexpr,
     HV: tl.constexpr,

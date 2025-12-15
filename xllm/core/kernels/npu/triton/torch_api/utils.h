@@ -20,7 +20,7 @@
 
 namespace xllm::kernel::npu {
     
-aclError setup(const char *kernel_name, void** workspace_addr, void** sync_block_lock) {
+aclError setup(const char *kernel_name, void** workspace_addr, void** sync_block_lock, uint32_t block_num) {
     int64_t workspace_size = -1;
     int64_t lock_init_value = 0;
     int64_t lock_num = -1;
@@ -28,6 +28,7 @@ aclError setup(const char *kernel_name, void** workspace_addr, void** sync_block
         workspace_size, lock_init_value, lock_num);
     if (workspace_size > 0) {
         // TODO workspacesize need to be * blockNum
+        workspace_size *= block_num;
         auto ret = aclrtMalloc(workspace_addr, workspace_size, ACL_MEM_MALLOC_HUGE_FIRST);
         if (ret != ACL_ERROR_NONE) {
             LOG(ERROR) << "Failed to allocate workspace for kernel "
