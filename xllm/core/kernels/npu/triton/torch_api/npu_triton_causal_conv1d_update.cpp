@@ -80,8 +80,7 @@ torch::Tensor npu_causal_conv1d_update(
             pad_slot_id,
             batch);
         if (ret != ACL_ERROR_NONE) {
-            LOG(ERROR) << "Failed to setup workspace and sync block lock for kernel "
-            << "_causal_conv1d_update_kernel_no_cache_len_no_mtp" << " : error=" << ret;
+            LOG(ERROR) << "Failed to launch kernel _causal_conv1d_update_kernel_no_cache_len_no_mtp: error=" << ret;
             return out;
         }
     }
