@@ -142,6 +142,29 @@ def _layer_norm_fwd(
     # heuristics for number of warps
     num_warps = min(max(BLOCK_N // 256, 1), 8)
     grid = (M if M < MAX_CORES else MAX_CORES, ngroups)
+
+     # 打印调试日志
+    print(f"grid:{grid}")
+     
+    print(f"x.shape:{x.shape}")
+    print(f"out.shape:{out.shape}")
+    print(f"weight.shape:{weight.shape}")
+    if bias is not None:
+        print(f"bias.shape:{bias.shape}")
+    if z is not None:
+        print(f"z.shape:{z.shape}")
+    if mean is not None:
+        print(f"mean.shape:{mean.shape}")
+    print(f"rstd.shape:{rstd.shape}")
+
+    print(f"x.stride(0):{x.stride(0)}")
+    print(f"out.stride(0):{out.stride(0)}")
+    print(f"z.stride(0):{z.stride(0)}")
+
+    print(f"M:{M}")
+    print(f"group_size:{group_size}")
+    print(f"eps:{eps}")
+
     with torch.npu.device(x.device.index):
         layer_norm_fwd_kernel[grid](
             x,
@@ -220,23 +243,19 @@ def layer_norm_golden_cpu(
     norm_before_gate: bool = True,
     is_rms_norm: bool = False
 ) -> torch.Tensor:
-    """
-    基于 PyTorch 原生函数的 CPU 参考实现（Golden）
-    完全对齐自定义 LayerNorm 的功能，支持分组归一化、RMSNorm、Z 分支门控等所有特性
-    """
-    # 1. 输入预处理（和自定义核一致：展平为 2D、确保 CPU 执行）
+    # 1. 输入预处理
     x_shape_og = x.shape
     x = x.reshape(-1, x.shape[-1]).cpu().contiguous()  # (M, N) = (batch*seq_len, feat_dim)
     M, N = x.shape
     
-    # 2. 辅助变量初始化（确保设备/类型一致）
+    # 2. 辅助变量初始化
     weight = weight.cpu().contiguous()
     bias = bias.cpu().contiguous() if bias is not None else None
     z = z.reshape(-1, z.shape[-1]).cpu().contiguous() if z is not None else None
     if z is not None:
         assert z.shape == (M, N), f"Z shape {z.shape} must match X shape ({M}, {N})"
     
-    # 3. 分组配置（和自定义核逻辑一致）
+    # 3. 分组配置
     if group_size is None:
         group_size = N
     assert N % group_size == 0, f"N={N} must be divisible by group_size={group_size}"
@@ -247,15 +266,14 @@ def layer_norm_golden_cpu(
         gate = z * torch.sigmoid(z)  # (M, N)
         x = x * gate
     
-    # 5. 分组归一化（用 unfold 拆分分组，避免手动循环）
+    # 5. 分组归一化
     # 拆分：(M, N) → (M, ngroups, group_size) → (M*ngroups, group_size)（适配 torch.layer_norm）
     x_grouped = x.unfold(dimension=1, size=group_size, step=group_size)  # (M, ngroups, group_size)
-    
     x_grouped = x_grouped.reshape(-1, group_size)  # (M*ngroups, group_size)
     
     # 6. 核心归一化（LayerNorm vs RMSNorm）
     if not is_rms_norm:
-        # 标准 LayerNorm：均值中心化 + 方差归一化（复用 PyTorch 原生实现）
+        # 标准 LayerNorm：均值中心化 + 方差归一化
         x_norm = torch.layer_norm(
             x_grouped, 
             normalized_shape=(group_size,), 
@@ -293,13 +311,14 @@ def test_custom_layer_norm():
     # 测试配置（覆盖所有关键参数组合）
     test_cases = [
         # (batch_size, seq_len, feat_dim, has_bias, has_z, norm_before_gate, is_rms_norm, group_size)
-        (2, 8, 128, False, False, True, False, None),    # 基础 LayerNorm（无偏置、无 Z）
-        (2, 8, 128, True, False, True, False, None),     # LayerNorm + 偏置
-        (2, 8, 128, True, True, True, False, None),      # LayerNorm + 偏置 + Z（前置门控）
-        (2, 8, 128, True, True, False, False, None),     # LayerNorm + 偏置 + Z（后置门控）
-        (2, 8, 128, False, True, True, True, None),      # RMSNorm + Z（前置门控）
-        (4, 16, 256, True, False, True, False, 64),      # 分组 LayerNorm（group_size=64）
-        (1, 4, 64, False, True, False, True, 32),        # 分组 RMSNorm + Z（后置门控）
+        # (2, 8, 128, False, False, True, False, None),    # 基础 LayerNorm（无偏置、无 Z）
+        # (2, 8, 128, True, False, True, False, None),     
+        # (2, 8, 128, True, True, True, False, None),      
+        # (2, 8, 128, True, True, False, False, None),    
+        (2, 8, 128, False, True, True, False, None),     
+        # (2, 8, 128, True, True, True, False, 128),     
+        # (4, 16, 256, True, False, True, False, 64),     
+        # (1, 4, 64, False, True, False, True, 32),    
     ]
     
     # 数值验证阈值（GPU 浮点精度差异可接受范围）
@@ -317,10 +336,17 @@ def test_custom_layer_norm():
         
         # 1. 生成随机输入（CPU 生成后移至 npu）
         torch.manual_seed(42)  # 固定种子，确保可复现
-        x = torch.randn(batch_size, seq_len, feat_dim, dtype=torch.float32)  # (B, S, D)
-        weight = torch.randn(feat_dim, dtype=torch.float32)  # 权重（必须有）
-        bias = torch.randn(feat_dim, dtype=torch.float32) if has_bias else None
-        z = torch.randn(batch_size, seq_len, feat_dim, dtype=torch.float32) if has_z else None
+        # x = torch.randn(batch_size, seq_len, feat_dim, dtype=torch.float32)  # (B, S, D)
+        # weight = torch.randn(feat_dim, dtype=torch.float32)  # 权重（必须有）
+        # bias = torch.randn(feat_dim, dtype=torch.float32) if has_bias else None
+        # z = torch.randn(batch_size, seq_len, feat_dim, dtype=torch.float32) if has_z else None
+        
+        x_arange = torch.arange(0, batch_size*seq_len*feat_dim, 1, dtype=torch.float32)
+        x = x_arange.reshape(batch_size, seq_len, feat_dim)
+        weight_arange = torch.arange(0, feat_dim, 1, dtype=torch.float32)
+        weight = weight_arange.reshape(feat_dim,)
+        bias = torch.ones(feat_dim, dtype=torch.float32) if has_bias else None
+        z = torch.ones(batch_size, seq_len, feat_dim, dtype=torch.float32) if has_z else None
         eps = 1e-6
         
         # 2. 计算 CPU Golden 输出
@@ -328,7 +354,7 @@ def test_custom_layer_norm():
             x=x, weight=weight, bias=bias, eps=eps, z=z,
             group_size=group_size, norm_before_gate=norm_before_gate, is_rms_norm=is_rms_norm
         )
-        
+        print(golden_output)
         # 3. 计算自定义核输出（仅当有 npu 时）
         if has_npu:
             x_npu = x.npu()

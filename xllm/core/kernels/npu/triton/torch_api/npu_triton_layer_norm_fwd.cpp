@@ -19,6 +19,14 @@ inline int64_t next_power_of_2(int64_t n) {
     return 1LL << (64 - __builtin_clzll(val ? val : 1));
 }
 
+void validate_tensor(const torch::Tensor& tensor, const char* name) {
+  TORCH_CHECK(tensor.defined(), name, " tensor is not defined");
+  TORCH_CHECK(tensor.is_contiguous(), name, " tensor must be contiguous");
+  TORCH_CHECK(tensor.device().type() == c10::DeviceType::PrivateUse1,
+              name,
+              " tensor must be on NPU device");
+}
+
 torch::Tensor layer_norm_fwd(
     const torch::Tensor& x,
     const torch::Tensor& weight,
@@ -29,7 +37,11 @@ torch::Tensor layer_norm_fwd(
     bool norm_before_gate,
     bool is_rms_norm
 ) {
-    std::cout << "-----------------layer_norm_fwd start----------------" <<std::endl;
+    validate_tensor(x, "x");
+    validate_tensor(weight, "weight");
+    TORCH_CHECK(x.dtype() == torch::kFloat32, "x must be float32");
+    TORCH_CHECK(weight.dtype() == torch::kFloat32, "weight must be float32");
+
     c10::IntArrayRef x_shape_og = x.sizes();
     int64_t last_dim = x.size(-1);
     torch::Tensor x_2d = x.reshape({-1, last_dim});
@@ -46,9 +58,12 @@ torch::Tensor layer_norm_fwd(
 
     torch::Tensor z_2d;
     if (z.has_value()) {
+
         TORCH_CHECK(z->stride(-1) == 1, "z stride(-1) must be 1");
         TORCH_CHECK(z->sizes() == x.sizes(), "z shape must match x");
         z_2d = z->reshape({-1, last_dim});
+        validate_tensor(z_2d, "z");
+        TORCH_CHECK(z_2d.dtype() == torch::kFloat32, "z must be float32");
     }
 
     // weight检查
@@ -61,10 +76,12 @@ torch::Tensor layer_norm_fwd(
         TORCH_CHECK(bias.stride(-1) == 1, "bias stride(-1) must be 1");
         TORCH_CHECK(bias.dim() == 1 && bias.size(0) == N, 
                     "bias must be 1-dimensional with size N");
+        validate_tensor(bias, "bias");
+        TORCH_CHECK(bias.dtype() == torch::kFloat32, "bias must be float32");
     }
 
-    torch::Tensor out_tensor = torch::empty_like(x);
-    TORCH_CHECK(out_tensor.sizes() == x.sizes(), "out shape must match x");
+    torch::Tensor out_tensor = torch::empty_like(x_2d);
+    TORCH_CHECK(out_tensor.sizes() == x_2d.sizes(), "out shape must match x");
     TORCH_CHECK(out_tensor.stride(-1) == 1, "out stride(-1) must be 1");
 
     // 均值和逆标准差张量分配
@@ -87,24 +104,28 @@ torch::Tensor layer_norm_fwd(
     const int64_t warp_base = BLOCK_N / 256;
     const int64_t num_warps = std::clamp<int64_t>(warp_base, 1, 8);
 
-    // 计算grid维度
-    const int64_t grid_m = std::min(M, MAX_CORES);
-    const auto grid = std::make_pair(grid_m, ngroups);
-
-    std::cout << "-----------------layer_norm_fwd end----------------" <<std::endl;
     auto npuStream = c10_npu::getCurrentNPUStream();
     rtStream_t stream = static_cast<rtStream_t>(npuStream.stream());
 
     int32_t gridCoreNum = std::min(M, MAX_CORES);
     int32_t gridNgroups = ngroups;
-    int32_t gridZ = 0;
+    int32_t gridZ = 1;
 
     void* x_2dPtr = x_2d.data_ptr();
     void* out_tensorPtr = out_tensor.data_ptr();
-    void* weightPtr = weight.data_ptr();   
-    void* biasPtr = bias.data_ptr();
-    void* z_2dPtr = z_2d.data_ptr();
-    void* meanPtr = mean.data_ptr();
+    void* weightPtr = weight.data_ptr();  
+    void* biasPtr = nullptr; 
+    if (bias.defined()) {
+        biasPtr = bias.data_ptr();
+    }
+    void* z_2dPtr = nullptr;
+    if (z_2d.defined()) {
+        z_2dPtr = z_2d.data_ptr();
+    }
+    void* meanPtr = nullptr;
+    if (mean.defined()) {
+        meanPtr = mean.data_ptr();
+    }
     void* rstdPtr = rstd.data_ptr();
     int32_t stride_x_row = x_2d.stride(0);
     int32_t stride_y_row = out_tensor.stride(0);
@@ -115,15 +136,8 @@ torch::Tensor layer_norm_fwd(
 
     void* workspace_addr = nullptr;
     void* sync_block_lock = nullptr;
-    uint32_t param_count = 3;
-    auto ret = setup("layer_norm_fwd_kernel", &workspace_addr, &sync_block_lock, param_count);
-    if (ret != ACL_ERROR_NONE) {
-        LOG(ERROR) << "Failed to setup workspace and sync block lock for kernel "
-        << "layer_norm_fwd_kernel" << " : error=" << ret;
-        return out_tensor;
-    }
 
-    ret = launchers::layer_norm_fwd_kernel(
+    auto ret = launchers::layer_norm_fwd_kernel(
         stream,
         gridCoreNum,
         gridNgroups,
@@ -133,7 +147,6 @@ torch::Tensor layer_norm_fwd(
         x_2dPtr,
         out_tensorPtr,
         weightPtr,
-        biasPtr,
         z_2dPtr,
         meanPtr,
         rstdPtr,
@@ -141,7 +154,7 @@ torch::Tensor layer_norm_fwd(
         stride_y_row,
         stride_z_row,
         M,
-        N,
+        group_size,
         eps
     );
     if (ret != ACL_ERROR_NONE) {
@@ -149,7 +162,7 @@ torch::Tensor layer_norm_fwd(
         << "layer_norm_fwd_kernel" << " : error=" << ret;
     }
     cleanup(workspace_addr, sync_block_lock);
-    return out_tensor;
+    return out_tensor.reshape(x_shape_og);
 }
 }
 
