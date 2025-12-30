@@ -67,5 +67,24 @@ REG_KERNEL_ARGS(_causal_conv1d_update_kernel_no_cache_len_no_mtp,
                 CAUSAL_CONV1D_UPDATE_NO_CACHE_NO_MTP_ARG_LIST)
 REG_KERNEL_LAUNCHER(_causal_conv1d_update_kernel_no_cache_len_no_mtp,
                     CAUSAL_CONV1D_UPDATE_NO_CACHE_NO_MTP_ARG_LIST)
+
+#define LAYERE_NORM_FWD_ARG_LIST(OP) \
+  OP(void*, X)                       \
+  OP(void*, Y)                       \
+  OP(void*, W)                       \
+  OP(void*, Z)                       \
+  OP(void*, Mean)                    \
+  OP(void*, Rstd)                    \
+  OP(int32_t, stride_x_row)          \
+  OP(int32_t, stride_y_row)          \
+  OP(int32_t, stride_z_row)          \
+  OP(int32_t, M)                     \
+  OP(int32_t, N)                     \
+  OP(float, eps)
+
+REG_KERNEL_ARGS(layer_norm_fwd_kernel,
+                LAYERE_NORM_FWD_ARG_LIST)
+REG_KERNEL_LAUNCHER(layer_norm_fwd_kernel,
+                    LAYERE_NORM_FWD_ARG_LIST)
 }  // namespace launchers
 }  // namespace xllm::kernel::npu
