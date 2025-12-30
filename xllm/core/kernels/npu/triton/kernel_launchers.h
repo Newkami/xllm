@@ -43,6 +43,7 @@ REG_KERNEL_LAUNCHER(fused_gdn_gating_head8_kernel, FUSED_GDN_GATING_ARG_LIST)
     OP(void*, h0)                                       \
     OP(void*, ht)                                       \
     OP(void*, cu_seqlens)                               \
+    OP(void*, ssm_state_indices)                        \
     OP(float, scale)                                    \
     OP(int32_t, N)                                      \
     OP(int32_t, T)
@@ -59,7 +60,8 @@ REG_KERNEL_LAUNCHER(fused_recurrent_gated_delta_rule_fwd_kernel,
     OP(void*, weight)                                      \
     OP(void*, conv_state_indices)                          \
     OP(void*, out)                                         \
-    OP(int32_t, pad_slot_id)                               
+    OP(int32_t, pad_slot_id)                               \
+    OP(int32_t, batch)                                     
  
 REG_KERNEL_ARGS(_causal_conv1d_update_kernel_no_cache_len_no_mtp,
                 CAUSAL_CONV1D_UPDATE_NO_CACHE_NO_MTP_ARG_LIST)
