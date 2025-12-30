@@ -164,7 +164,7 @@ std::pair<torch::Tensor, torch::Tensor> npu_fused_recurrent_gated_delta_rule(
     void* workspace_addr = nullptr;
     void* sync_block_lock = nullptr;
     uint32_t block_num = gridX * gridY * gridZ;
-
+    
     auto ret = launchers::fused_recurrent_gated_delta_rule_fwd_kernel(
         stream,
         gridX,
