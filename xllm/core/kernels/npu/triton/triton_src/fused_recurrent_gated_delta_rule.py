@@ -382,14 +382,14 @@ def test_recurrent_fused_gated_delta_rule(
 ) -> None:
     """Simple accuracy test comparing Triton kernel with golden PyTorch version."""
     torch.manual_seed(0)
-    dtype = torch.float16
+    dtype = torch.bfloat16
     L = batch * T
     q = torch.randn(batch, T, num_heads, k_head_dim, dtype=dtype)
     k = torch.randn(batch, T, num_heads, k_head_dim, dtype=dtype)
     v = torch.randn(batch, T, num_v_heads, v_head_dim, dtype=dtype)
     g = torch.randn(batch, T, num_v_heads, dtype=torch.float32)
     beta = torch.randn(batch, T, num_v_heads, dtype=torch.float32)
-    initial_state = torch.randn(batch, T, num_v_heads, k_head_dim, v_head_dim, dtype=torch.float32)
+    initial_state = torch.randn(batch, num_v_heads, k_head_dim, v_head_dim, dtype=torch.float32)
 
     if num_v_heads // num_heads > 1:
         q_ = q.repeat_interleave(num_v_heads // num_heads, dim=2)
@@ -414,6 +414,7 @@ def test_recurrent_fused_gated_delta_rule(
     init_d = initial_state.to(device)
     culen = [i for i in range(0, batch + 1)]
     cu_seqlens = torch.LongTensor(culen).to(device)
+    ssm_state_indices = torch.arange(batch, dtype=torch.int32, device=device)
 
     o_d, state_d = fused_recurrent_gated_delta_rule(
         q=q_d,
@@ -424,6 +425,7 @@ def test_recurrent_fused_gated_delta_rule(
         initial_state=init_d,
         cu_seqlens=cu_seqlens,
         inplace_final_state=False,
+        ssm_state_indices=ssm_state_indices,
         use_qk_l2norm_in_kernel=True,
     )
 

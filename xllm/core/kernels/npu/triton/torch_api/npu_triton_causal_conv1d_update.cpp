@@ -29,7 +29,7 @@ torch::Tensor npu_causal_conv1d_update(
     const std::optional<torch::Tensor>& num_accepted_tokens,
     const std::optional<torch::Tensor>& query_start_loc,
     int32_t max_query_len,
-    std::optional<torch::Tensor>& intermediate_conv_window,
+    const std::optional<torch::Tensor>& intermediate_conv_window,
     int32_t pad_slot_id,
     bool validate_data) {
     if (query_start_loc.has_value()) {
@@ -77,7 +77,8 @@ torch::Tensor npu_causal_conv1d_update(
             weight_ptr,
             conv_state_indices_ptr,
             out_ptr,
-            pad_slot_id);
+            pad_slot_id,
+            batch);
         if (ret != ACL_ERROR_NONE) {
             LOG(ERROR) << "Failed to setup workspace and sync block lock for kernel "
             << "_causal_conv1d_update_kernel_no_cache_len_no_mtp" << " : error=" << ret;
