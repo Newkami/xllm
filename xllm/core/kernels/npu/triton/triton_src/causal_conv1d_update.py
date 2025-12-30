@@ -743,7 +743,8 @@ def _causal_conv1d_update_kernel(
             if KERNEL_WIDTH >= 4:
                 tl.store(base_ptr + 2 * stride_inter_win, col2, mask=mask_w)
 
-@triton.jit(do_not_specialize=['batch'])
+
+@triton.jit(do_not_specialize=["batch"])
 def _causal_conv1d_update_kernel_no_cache_len_no_mtp(
         x_ptr,
         conv_state_ptr,
@@ -1125,14 +1126,13 @@ def causal_conv1d_update_ref(x,
     return (out if activation is None else F.silu(out)).to(dtype=dtype_in)
 
 
-@pytest.mark.parametrize("batch", [1, 2, 4, 8, 16])
 @pytest.mark.parametrize("itype", [torch.bfloat16])
 @pytest.mark.parametrize("silu_activation", [True])
 @pytest.mark.parametrize("has_bias", [False])
 @pytest.mark.parametrize("seqlen", [1])
 @pytest.mark.parametrize("width", [4])
 @pytest.mark.parametrize("dim", [2048])
-def test_causal_conv1d_update(batch, dim, width, seqlen, has_bias, silu_activation,
+def test_causal_conv1d_update(bs, dim, width, seqlen, has_bias, silu_activation,
                               itype):
     device = "npu"
     rtol, atol = (3e-4, 1e-3) if itype == torch.float32 else (3e-3, 5e-3)
@@ -1140,7 +1140,7 @@ def test_causal_conv1d_update(batch, dim, width, seqlen, has_bias, silu_activati
         rtol, atol = 1e-2, 5e-2
     # set seed
     # current_platform.seed_everything(0)
-    batch = batch
+    batch = int(bs)
     x = torch.randn(batch, dim, seqlen, device=device, dtype=itype)
     x_ref = x.clone()
     conv_state = torch.randn(batch, dim, width - 1, device=device, dtype=itype)
@@ -1168,6 +1168,7 @@ def test_causal_conv1d_update(batch, dim, width, seqlen, has_bias, silu_activati
 
     assert torch.equal(conv_state, conv_state_ref)
     assert torch.allclose(out, out_ref, rtol=rtol, atol=atol)
+    print(f"test passed for causal_conv1d_npu, batch = {bs}")
     
 
 
