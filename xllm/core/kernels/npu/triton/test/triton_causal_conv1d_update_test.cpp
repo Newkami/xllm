@@ -34,62 +34,102 @@ constexpr float kTolerance = 5e-2f;  // bfloat16 tolerance
 constexpr int32_t kDeviceId = 0;
 
 torch::Tensor causal_conv1d_update_ref(
-    torch::Tensor x,
-    torch::Tensor conv_state,
-    torch::Tensor weight,
-    const std::optional<torch::Tensor>& bias,
-    bool activation) {
-  auto dtype_in = x.scalar_type();
-  bool unsqueeze = x.dim() == 2;
-  if (unsqueeze) {
-    x = x.unsqueeze(-1);
-  }
+    const torch::Tensor& x,
+    torch::Tensor& conv_state,  // Modified in-place
+    const torch::Tensor& weight,
+    const std::optional<torch::Tensor>& bias = std::nullopt,
+    bool activation = true,
+    const std::optional<torch::Tensor>& cache_seqlens = std::nullopt) {
 
-  int64_t batch = x.size(0);
-  int64_t dim = x.size(1);
-  int64_t seqlen = x.size(2);
-  int64_t width = weight.size(1);
-  int64_t state_len = conv_state.size(2);
+    auto dtype_in = x.scalar_type();
+    bool unsqueeze = (x.dim() == 2);
+    torch::Tensor x_ = unsqueeze ? x.unsqueeze(-1) : x;
+    int64_t batch = x_.size(0);
+    int64_t dim = x_.size(1);
+    int64_t seqlen = x_.size(2);
+    int64_t width = weight.size(1);
+    int64_t state_len = conv_state.size(2);
 
-  // Concatenate conv_state and x along the last dimension
-  auto x_new = torch::cat({conv_state, x}, -1).to(weight.dtype());
-  
-  // Update conv_state with the last state_len elements
-  conv_state.copy_(x_new.slice(2, seqlen, seqlen + state_len));
+    // Validate tensor shapes
+    TORCH_CHECK(conv_state.sizes().vec() == std::vector<int64_t>({batch, dim, state_len}),
+                "conv_state shape mismatch. Expected: (", batch, ", ", dim, ", ", state_len,
+                "), Got: ", conv_state.sizes());
+    TORCH_CHECK(weight.sizes().vec() == std::vector<int64_t>({dim, width}),
+                "weight shape mismatch. Expected: (", dim, ", ", width,
+                "), Got: ", weight.sizes());
 
-  // Prepare weight for grouped convolution: (dim, width) -> (dim, 1, width)
-  // For grouped conv1d, weight should be (dim, 1, width)
-  auto weight_expanded = weight.unsqueeze(1);  // (dim, 1, width)
-  
-  // x_new is (batch, dim, state_len + seqlen)
-  // For grouped convolution with groups=dim, we need to reshape:
-  // x_new: (batch, dim, L) -> (batch, dim, 1, L) -> (batch * dim, 1, L)
-  // But actually, PyTorch conv1d expects (N, C, L) where N=batch, C=dim
-  // For grouped conv, it will automatically handle it
-  
-  // Use functional conv1d
-  torch::Tensor out;
-  if (bias.has_value()) {
-    out = torch::nn::functional::conv1d(x_new, weight_expanded, bias.value(),
-                                         torch::nn::functional::Conv1dFuncOptions().groups(dim).padding(0));
-  } else {
-    out = torch::nn::functional::conv1d(x_new, weight_expanded, torch::Tensor(),
-                                         torch::nn::functional::Conv1dFuncOptions().groups(dim).padding(0));
-  }
-  
-  // Take only the last seqlen elements
-  out = out.slice(2, -seqlen);
+    torch::Tensor x_new;
+    if (!cache_seqlens.has_value()) {
+        // Case 1: Standard state update (non-circular buffer)
+        x_new = torch::cat({conv_state, x_}, -1).to(weight.scalar_type());
+        // Update conv_state in-place (last state_len elements)
+        conv_state.copy_(x_new.slice(-1, -state_len, x_new.size(-1)));
+    } else {
+        // Case 2: Circular buffer update
+        auto cache_seqlens_tensor = cache_seqlens.value();
+        TORCH_CHECK(cache_seqlens_tensor.sizes().vec() == std::vector<int64_t>({batch}),
+                    "cache_seqlens must be 1D tensor of size (batch,)");
 
-  // Apply activation if needed
-  if (activation) {
-    out = torch::silu(out);
-  }
+        // Ensure cache_seqlens is on the same device as other tensors
+        cache_seqlens_tensor = cache_seqlens_tensor.to(x_.device());
 
-  if (unsqueeze) {
-    out = out.squeeze(-1);
-  }
+        // Generate width indices: [-(width-1), ..., -1] + cache_seqlens
+        auto arange_tensor = torch::arange(-(width - 1), 0, torch::kLong).to(x_.device());
+        auto width_idx = arange_tensor.unsqueeze(0)
+                         .add(cache_seqlens_tensor.unsqueeze(1))
+                         .to(torch::kLong);
 
-  return out.to(dtype_in);
+        // Apply modulo for circular indexing
+        width_idx = torch::remainder(width_idx, state_len)
+                    .unsqueeze(1)  // Add dim dimension
+                    .expand({batch, dim, width - 1});
+
+        // Gather from conv_state using computed indices
+        auto state_gathered = conv_state.gather(2, width_idx);
+
+        // Construct new input tensor
+        x_new = torch::cat({state_gathered, x_}, -1).to(weight.scalar_type());
+
+        // Compute copy indices for updating conv_state
+        auto copy_idx = torch::arange(0, seqlen, torch::kLong).to(x_.device())
+                        .unsqueeze(0)
+                        .add(cache_seqlens_tensor.unsqueeze(1));
+        copy_idx = torch::remainder(copy_idx, state_len)
+                   .unsqueeze(1)  // Add dim dimension
+                   .expand({batch, dim, seqlen})
+                   .to(torch::kLong);
+
+        // Scatter x into conv_state (in-place update)
+        conv_state.scatter_(2, copy_idx, x_);
+    }
+
+    // Prepare bias tensor for conv1d
+    torch::Tensor bias_tensor = bias.has_value() ? bias.value() : torch::Tensor();
+
+    // Perform depthwise convolution (groups=dim)
+    auto weight_4d = weight.unsqueeze(1);  // (dim, 1, width)
+    torch::Tensor out = torch::conv1d(
+        x_new,
+        weight_4d,
+        bias_tensor,
+        /*stride=*/torch::IntArrayRef{1},
+        /*padding=*/torch::IntArrayRef{0},
+        /*dilation=*/torch::IntArrayRef{1},
+        /*groups=*/static_cast<int64_t>(dim)
+    );
+
+    // Slice to keep only the last 'seqlen' elements
+    out = out.slice(-1, -seqlen, out.size(-1));
+
+    if (activation) {
+        out = torch::silu(out);
+    }
+
+    // Restore original shape and dtype
+    if (unsqueeze) {
+        out = out.squeeze(-1);
+    }
+    return out.to(dtype_in);
 }
 
 class TritonCausalConv1dUpdateTest : public ::testing::Test {
@@ -175,18 +215,18 @@ TEST_F(TritonCausalConv1dUpdateTest, MultiBatchTest) {
   }
 
   // Create conv_state_indices for continuous batching
-  auto conv_state_indices = torch::arange(batch, torch::kInt32, device);
+  auto conv_state_indices = torch::arange(batch, torch::TensorOptions().dtype(torch::kInt32).device(device));
 
   // Run reference implementation on CPU
   auto out_ref = causal_conv1d_update_ref(
-      x_ref, conv_state_ref, weight_ref, std::nullopt, silu_activation);
+      x_ref, conv_state_ref, weight_ref, std::nullopt, silu_activation, std::nullopt);
 
   // Run NPU kernel
   auto npu_stream = c10_npu::getCurrentNPUStream(kDeviceId);
   auto out = npu_causal_conv1d_update(
       x, conv_state, weight, 
-      bias.has_value() ? bias.value() : torch::Tensor(),
       silu_activation,
+      bias,
       std::nullopt,  // cache_seqlens
       conv_state_indices,
       std::nullopt,  // num_accepted_tokens
@@ -201,19 +241,19 @@ TEST_F(TritonCausalConv1dUpdateTest, MultiBatchTest) {
   // Compare results
   auto out_cpu = out.cpu();
   auto output_diff = (out_ref - out_cpu).abs();
-  float max_diff = output_diff.max().item<float>();
+  float max_diff = output_diff.max().item().toFloat();
   
   EXPECT_LT(max_diff, atol) 
       << "Output mismatch: max diff = " << max_diff
       << ", tolerance = " << atol
       << ", shape: " << out_cpu.sizes()
-      << ", ref range [" << out_ref.min().item<float>() << ", " << out_ref.max().item<float>() << "]"
-      << ", actual range [" << out_cpu.min().item<float>() << ", " << out_cpu.max().item<float>() << "]";
+      << ", ref range [" << out_ref.min().item().toFloat() << ", " << out_ref.max().item().toFloat() << "]"
+      << ", actual range [" << out_cpu.min().item().toFloat() << ", " << out_cpu.max().item().toFloat() << "]";
 
   // Compare conv_state (it should be updated)
   auto conv_state_cpu = conv_state.cpu();
   auto state_diff = (conv_state_ref - conv_state_cpu).abs();
-  float max_state_diff = state_diff.max().item<float>();
+  float max_state_diff = state_diff.max().item().toFloat();
   
   // Note: conv_state comparison might have some differences due to numerical precision
   // We use a more relaxed tolerance for state comparison
