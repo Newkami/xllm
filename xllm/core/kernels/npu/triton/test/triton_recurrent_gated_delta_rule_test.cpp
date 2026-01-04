@@ -172,7 +172,7 @@ TEST_F(TritonRecurrentGatedDeltaRuleTest, MultiBatchTest) {
 
   torch::manual_seed(0);
   auto dtype = torch::kBFloat16;
-  float atol = 1e-2 if dtype == torch::kBFloat16 else 1e-3;
+  float atol = dtype == torch::kBFloat16 ? 1e-2 : 1e-3;
   auto L = batch * T;
   
   auto q = torch::randn({batch, T, num_heads, k_head_dim}, dtype);
@@ -210,7 +210,7 @@ TEST_F(TritonRecurrentGatedDeltaRuleTest, MultiBatchTest) {
       culen.push_back(i);
   }
   auto cu_seqlens = torch::tensor(culen, torch::kInt64).to(device);
-  auto ssm_state_indices = torch::arange(batch, torch::kInt32, device);
+  auto ssm_state_indices = torch::arange(batch, torch::TensorOptions().dtype(torch::kInt32).device(device));
 
   // Calculate scale factor
   float scale_val = 1.0f / std::sqrt(static_cast<float>(k_head_dim));

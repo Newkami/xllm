@@ -1174,4 +1174,4 @@ def test_causal_conv1d_update(bs, dim, width, seqlen, has_bias, silu_activation,
 
 if __name__ == "__main__":
     pass
-    # test_causal_conv1d_update(dim = 2048, width = 4, seqlen = 1, has_bias = False, silu_activation = True, itype = torch.bfloat16)
+    # test_causal_conv1d_update(bs = 1, dim = 2048, width = 4, seqlen = 1, has_bias = False, silu_activation = True, itype = torch.bfloat16)
