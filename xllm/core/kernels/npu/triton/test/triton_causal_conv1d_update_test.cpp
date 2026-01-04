@@ -33,10 +33,6 @@ namespace xllm::kernel::npu {
 constexpr float kTolerance = 5e-2f;  // bfloat16 tolerance
 constexpr int32_t kDeviceId = 0;
 
-#include <torch/torch.h>
-#include <vector>
-#include <string>
-
 torch::Tensor causal_conv1d_update_ref(
     const torch::Tensor& x,
     torch::Tensor& conv_state,  // Modified in-place
