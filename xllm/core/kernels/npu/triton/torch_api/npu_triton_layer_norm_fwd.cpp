@@ -116,7 +116,6 @@ torch::Tensor layer_norm_fwd(
         out_tensorPtr,
         weightPtr,
         z_2dPtr,
-        meanPtr,
         rstdPtr,
         stride_x_row,
         stride_y_row,

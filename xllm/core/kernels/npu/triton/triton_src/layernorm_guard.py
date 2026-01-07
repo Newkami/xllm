@@ -315,7 +315,8 @@ def test_custom_layer_norm():
         # (2, 8, 128, True, False, True, False, None),     
         # (2, 8, 128, True, True, True, False, None),      
         # (2, 8, 128, True, True, False, False, None),    
-        (2, 8, 128, False, True, True, False, None),     
+        # (2, 8, 128, False, True, True, False, None),   
+        (2, 8, 128, False, True, True, True, None),
         # (2, 8, 128, True, True, True, False, 128),     
         # (4, 16, 256, True, False, True, False, 64),     
         # (1, 4, 64, False, True, False, True, 32),    
@@ -336,17 +337,11 @@ def test_custom_layer_norm():
         
         # 1. 生成随机输入（CPU 生成后移至 npu）
         torch.manual_seed(42)  # 固定种子，确保可复现
-        # x = torch.randn(batch_size, seq_len, feat_dim, dtype=torch.float32)  # (B, S, D)
-        # weight = torch.randn(feat_dim, dtype=torch.float32)  # 权重（必须有）
-        # bias = torch.randn(feat_dim, dtype=torch.float32) if has_bias else None
-        # z = torch.randn(batch_size, seq_len, feat_dim, dtype=torch.float32) if has_z else None
+        x = torch.randn(batch_size, seq_len, feat_dim, dtype=torch.float32)  # (B, S, D)
+        weight = torch.randn(feat_dim, dtype=torch.float32)  # 权重（必须有）
+        bias = torch.randn(feat_dim, dtype=torch.float32) if has_bias else None
+        z = torch.randn(batch_size, seq_len, feat_dim, dtype=torch.float32) if has_z else None
         
-        x_arange = torch.arange(0, batch_size*seq_len*feat_dim, 1, dtype=torch.float32)
-        x = x_arange.reshape(batch_size, seq_len, feat_dim)
-        weight_arange = torch.arange(0, feat_dim, 1, dtype=torch.float32)
-        weight = weight_arange.reshape(feat_dim,)
-        bias = torch.ones(feat_dim, dtype=torch.float32) if has_bias else None
-        z = torch.ones(batch_size, seq_len, feat_dim, dtype=torch.float32) if has_z else None
         eps = 1e-6
         
         # 2. 计算 CPU Golden 输出

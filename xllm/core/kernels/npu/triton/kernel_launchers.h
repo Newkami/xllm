@@ -73,7 +73,6 @@ REG_KERNEL_LAUNCHER(_causal_conv1d_update_kernel_no_cache_len_no_mtp,
   OP(void*, Y)                       \
   OP(void*, W)                       \
   OP(void*, Z)                       \
-  OP(void*, Mean)                    \
   OP(void*, Rstd)                    \
   OP(int32_t, stride_x_row)          \
   OP(int32_t, stride_y_row)          \
